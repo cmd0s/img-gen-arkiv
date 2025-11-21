@@ -108,6 +108,7 @@ def fix_string_ids():
             receipt = arkiv.arkiv.update_entity(
                 entity_key=item['key'],
                 attributes=new_attrs,
+                expires_in=arkiv.arkiv.to_seconds(days=128),  # Required parameter
             )
 
             fixed_count += 1
