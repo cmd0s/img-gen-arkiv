@@ -1,0 +1,280 @@
+import json
+import uuid
+import time
+import os
+import requests
+from websocket import create_connection
+
+from prompt_generator import (
+    seed_database,
+    get_next_prompt,
+    mark_in_progress,
+    mark_completed,
+    mark_failed,
+    get_stats,
+    reset_in_progress,
+)
+from arkiv_uploader import upload_image_to_arkiv
+
+# 1. Configure for your Windows machine with ComfyUI
+COMFY_HOST = "192.168.0.122"   # Enter the IP of your Windows with ComfyUI
+COMFY_PORT = 8899             # Enter the ComfyUI port, e.g. 8188
+
+BASE_URL = f"http://{COMFY_HOST}:{COMFY_PORT}"
+WS_URL = f"ws://{COMFY_HOST}:{COMFY_PORT}/ws"
+
+# Workflow file name located next to this script
+WORKFLOW_JSON = "workflow.json"
+
+# Node ID that has the "text" field with the prompt
+# How to find it:
+# - open workflow.json in a text editor
+# - find your example prompt
+# - the dictionary key above that fragment is the node ID, e.g. "7"
+PROMPT_NODE_ID = "6"
+
+# Delay between generations (seconds)
+DELAY_BETWEEN_GENERATIONS = 2
+
+# ARKIV settings
+MAX_IMAGE_SIZE_KB = 117
+UPLOAD_TO_ARKIV = True
+
+
+def load_workflow() -> dict:
+    with open(WORKFLOW_JSON, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def set_prompt(workflow: dict, node_id: str, prompt: str) -> dict:
+    # Deep copy to avoid modifying the original
+    wf = json.loads(json.dumps(workflow))
+    if node_id not in wf:
+        raise KeyError(f"Node with id {node_id} not found in workflow.json")
+
+    if "inputs" not in wf[node_id] or "text" not in wf[node_id]["inputs"]:
+        raise KeyError(f"Node {node_id} does not have inputs.text field")
+
+    wf[node_id]["inputs"]["text"] = prompt
+    return wf
+
+
+def send_prompt_to_comfy(workflow: dict, client_id: str):
+    payload = {
+        "prompt": workflow,
+        "client_id": client_id,
+    }
+
+    resp = requests.post(f"{BASE_URL}/prompt", json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    prompt_id = data.get("prompt_id")
+
+    if not prompt_id:
+        raise RuntimeError(f"No prompt_id in ComfyUI response: {data}")
+
+    print("Prompt sent to ComfyUI, prompt_id:", prompt_id)
+    return prompt_id
+
+
+def wait_for_images(ws, prompt_id: str, timeout: int = 300):
+    """Wait for generation to complete and collect image info."""
+
+    images = []
+    start = time.time()
+
+    while True:
+        if time.time() - start > timeout:
+            raise TimeoutError("Timeout waiting for images")
+
+        msg = ws.recv()
+        if not msg:
+            continue
+
+        data = json.loads(msg)
+
+        msg_type = data.get("type")
+        msg_data = data.get("data", {})
+
+        # Look for executed nodes
+        if msg_type == "executed":
+            if msg_data.get("prompt_id") != prompt_id:
+                continue
+
+            output = msg_data.get("output", {})
+            if "images" in output:
+                for img in output["images"]:
+                    images.append(img)
+
+        # End of workflow execution signal
+        if msg_type in ("execution_success", "execution_complete"):
+            if msg_data.get("prompt_id") == prompt_id:
+                print("ComfyUI finished generating for this prompt.")
+                break
+
+    if not images:
+        raise RuntimeError("ComfyUI did not return any images")
+
+    return images
+
+
+def download_image(image_info: dict, out_path: str):
+    params = {
+        "filename": image_info["filename"],
+        "subfolder": image_info.get("subfolder", ""),
+        "type": image_info.get("type", "output"),
+    }
+
+    resp = requests.get(f"{BASE_URL}/view", params=params, stream=True)
+    resp.raise_for_status()
+
+    with open(out_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+
+    print("Image saved:", out_path)
+
+
+def upload_to_arkiv(image_path: str, prompt: str, image_id: str) -> dict:
+    """Upload image to ARKIV blockchain."""
+
+    print(f"Uploading to ARKIV: {image_path}")
+
+    # Read image data
+    with open(image_path, "rb") as f:
+        image_data = f.read()
+
+    # Determine content type
+    ext = os.path.splitext(image_path)[1].lower()
+    content_type = "image/png" if ext == ".png" else "image/jpeg"
+
+    size_kb = len(image_data) / 1024
+    print(f"Image size: {size_kb:.2f}KB, Content-Type: {content_type}")
+
+    # Upload to ARKIV
+    result = upload_image_to_arkiv(image_data, prompt, image_id, content_type)
+
+    print(f"ARKIV upload success! Entity: {result.get('entityKey')}")
+    return result
+
+
+def generate_image(prompt_text: str, image_id: str) -> str:
+    # 1. Load workflow
+    workflow = load_workflow()
+
+    # 2. Replace prompt
+    workflow = set_prompt(workflow, PROMPT_NODE_ID, prompt_text)
+
+    # 3. Generate client_id and connect WebSocket BEFORE sending prompt
+    client_id = str(uuid.uuid4())
+    ws_url_with_client = f"{WS_URL}?clientId={client_id}"
+    print(f"Connecting to WebSocket: {ws_url_with_client}")
+    ws = create_connection(ws_url_with_client)
+
+    try:
+        # 4. Send workflow to ComfyUI
+        prompt_id = send_prompt_to_comfy(workflow, client_id)
+
+        # 5. Wait for images via WebSocket
+        images = wait_for_images(ws, prompt_id)
+    finally:
+        ws.close()
+
+    # 6. Download first image and save as PNG
+    os.makedirs("output", exist_ok=True)
+    img_info = images[0]
+    out_path = f"output/cat_{image_id}.png"
+    download_image(img_info, out_path)
+
+    # 7. Upload to ARKIV if enabled
+    if UPLOAD_TO_ARKIV:
+        # Check image size
+        image_size_kb = os.path.getsize(out_path) / 1024
+
+        if image_size_kb > MAX_IMAGE_SIZE_KB:
+            print(f"Image too large for ARKIV ({image_size_kb:.2f}KB > {MAX_IMAGE_SIZE_KB}KB), skipping upload")
+        else:
+            # Upload to ARKIV
+            try:
+                upload_to_arkiv(out_path, prompt_text, image_id)
+            except Exception as e:
+                print(f"ARKIV upload failed (continuing anyway): {e}")
+
+    return out_path
+
+
+def run_endless_generator():
+    """Run endless cat image generation from database."""
+    print("=" * 60)
+    print("ENDLESS CAT IMAGE GENERATOR")
+    print("=" * 60)
+
+    # Initialize and seed database if needed
+    seed_database(shuffle=True)
+
+    # Reset any interrupted generations
+    reset_in_progress()
+
+    stats = get_stats()
+    print(f"\nStarting from: {stats['completed']}/{stats['total']} completed ({stats['progress_percent']:.1f}%)")
+    print(f"ARKIV upload: {'ENABLED' if UPLOAD_TO_ARKIV else 'DISABLED'}")
+    print("-" * 60)
+
+    generation_count = 0
+
+    while True:
+        # Get next prompt
+        item = get_next_prompt()
+
+        if not item:
+            print("\n" + "=" * 60)
+            print("ALL DONE! No more prompts to generate.")
+            print("=" * 60)
+            break
+
+        prompt_id = item["id"]
+        prompt_text = item["prompt"]
+        image_id = str(prompt_id)
+
+        generation_count += 1
+        stats = get_stats()
+
+        print(f"\n[{stats['completed'] + 1}/{stats['total']}] Generating...")
+        print(f"Prompt: {prompt_text[:80]}...")
+
+        # Mark as in progress
+        mark_in_progress(prompt_id)
+
+        try:
+            # Generate the image
+            output_path = generate_image(prompt_text, image_id)
+
+            # Mark as completed
+            mark_completed(prompt_id, output_path)
+
+            print(f"SUCCESS: {output_path}")
+
+        except KeyboardInterrupt:
+            print("\n\nInterrupted by user. Marking current item as pending...")
+            mark_failed(prompt_id)
+            stats = get_stats()
+            print(f"Progress saved: {stats['completed']}/{stats['total']} completed")
+            break
+
+        except Exception as e:
+            print(f"FAILED: {e}")
+            mark_failed(prompt_id)
+            # Continue with next prompt
+
+        # Small delay between generations
+        if DELAY_BETWEEN_GENERATIONS > 0:
+            time.sleep(DELAY_BETWEEN_GENERATIONS)
+
+    # Final stats
+    stats = get_stats()
+    print(f"\nFinal stats: {stats['completed']}/{stats['total']} completed ({stats['progress_percent']:.1f}%)")
+
+
+if __name__ == "__main__":
+    run_endless_generator()

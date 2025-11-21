@@ -1,0 +1,4 @@
+requests
+websocket-client
+arkiv-sdk>=1.0.0a9
+python-dotenv
