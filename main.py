@@ -136,7 +136,7 @@ def download_image(image_info: dict, out_path: str):
     print("Image saved:", out_path)
 
 
-def upload_to_arkiv(image_path: str, prompt: str, image_id: str) -> dict:
+def upload_to_arkiv(image_path: str, prompt: str, image_id: int) -> dict:
     """Upload image to ARKIV blockchain."""
 
     print(f"Uploading to ARKIV: {image_path}")
@@ -159,7 +159,7 @@ def upload_to_arkiv(image_path: str, prompt: str, image_id: str) -> dict:
     return result
 
 
-def generate_image(prompt_text: str, image_id: str) -> str:
+def generate_image(prompt_text: str, image_id: int) -> str:
     # 1. Load workflow
     workflow = load_workflow()
 
@@ -235,7 +235,7 @@ def run_endless_generator():
 
         prompt_id = item["id"]
         prompt_text = item["prompt"]
-        image_id = str(prompt_id)
+        image_id = prompt_id
 
         generation_count += 1
         stats = get_stats()

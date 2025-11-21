@@ -30,7 +30,7 @@ def get_arkiv_client() -> Arkiv:
 def upload_image_to_arkiv(
     image_data: bytes,
     prompt: str,
-    image_id: str,
+    image_id: int,
     content_type: str = "image/jpeg"
 ) -> dict:
     """
