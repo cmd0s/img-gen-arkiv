@@ -129,6 +129,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.DS_Store
+generations.db
 
 # Spyder project settings
 .spyderproject

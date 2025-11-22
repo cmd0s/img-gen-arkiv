@@ -172,7 +172,7 @@ def get_output_prefix():
 def init_db():
     """Initialize SQLite database for tracking generations."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS generations (
@@ -221,7 +221,7 @@ def seed_database(shuffle: bool = True):
         random.shuffle(prompts)
 
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
 
     # Insert prompts, ignore if already exists
@@ -254,7 +254,7 @@ def seed_database(shuffle: bool = True):
 def get_next_prompt():
     """Get next pending prompt from database."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -274,7 +274,7 @@ def get_next_prompt():
 def mark_in_progress(prompt_id: int):
     """Mark a prompt as in progress."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'in_progress' WHERE id = ?",
@@ -287,7 +287,7 @@ def mark_in_progress(prompt_id: int):
 def mark_completed(prompt_id: int, filename: str):
     """Mark a prompt as completed with the output filename."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute(
         """UPDATE generations
@@ -302,7 +302,7 @@ def mark_completed(prompt_id: int, filename: str):
 def mark_failed(prompt_id: int):
     """Mark a prompt as failed (will be retried)."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'pending' WHERE id = ?",
@@ -315,7 +315,7 @@ def mark_failed(prompt_id: int):
 def get_stats():
     """Get generation statistics."""
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
 
     cursor.execute("SELECT COUNT(*) FROM generations")
@@ -330,6 +330,9 @@ def get_stats():
     cursor.execute("SELECT COUNT(*) FROM generations WHERE status = 'in_progress'")
     in_progress = cursor.fetchone()[0]
 
+    cursor.execute("SELECT COUNT(*) FROM generations WHERE status = 'generated'")
+    generated = cursor.fetchone()[0]
+
     conn.close()
 
     return {
@@ -337,14 +340,18 @@ def get_stats():
         "pending": pending,
         "completed": completed,
         "in_progress": in_progress,
+        "generated": generated,
         "progress_percent": (completed / total * 100) if total > 0 else 0
     }
 
 
 def reset_in_progress():
-    """Reset any 'in_progress' items back to 'pending' (for crash recovery)."""
+    """Reset any 'in_progress' items back to 'pending' (for crash recovery).
+
+    Note: This is the legacy function. For threaded mode, use reset_interrupted().
+    """
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'pending' WHERE status = 'in_progress'"
@@ -356,6 +363,85 @@ def reset_in_progress():
     if affected > 0:
         print(f"Reset {affected} interrupted generations back to pending")
     return affected
+
+
+# =============================================================================
+# THREADED MODE FUNCTIONS
+# =============================================================================
+
+def mark_generated(prompt_id: int, filename: str):
+    """Mark a prompt as generated (image created, ready for upload)."""
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE generations SET status = 'generated', filename = ? WHERE id = ?",
+        (filename, prompt_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_next_generated():
+    """Get next item ready for upload (status='generated')."""
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, prompt, filename FROM generations
+        WHERE status = 'generated'
+        ORDER BY id
+        LIMIT 1
+    """)
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {"id": result[0], "prompt": result[1], "filename": result[2]}
+    return None
+
+
+def get_generated_count():
+    """Get count of items waiting for upload."""
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM generations WHERE status = 'generated'")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
+def reset_interrupted():
+    """Reset interrupted items for crash recovery (threaded mode).
+
+    - 'in_progress' -> 'pending' (generation was interrupted)
+    - 'generated' items stay as-is (image exists, just needs upload)
+    """
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    cursor = conn.cursor()
+
+    # Reset interrupted generations
+    cursor.execute(
+        "UPDATE generations SET status = 'pending' WHERE status = 'in_progress'"
+    )
+    gen_reset = cursor.rowcount
+
+    # Count items waiting for upload
+    cursor.execute("SELECT COUNT(*) FROM generations WHERE status = 'generated'")
+    pending_uploads = cursor.fetchone()[0]
+
+    conn.commit()
+    conn.close()
+
+    if gen_reset > 0:
+        print(f"Reset {gen_reset} interrupted generations back to pending")
+    if pending_uploads > 0:
+        print(f"Found {pending_uploads} images waiting for upload")
+
+    return {"gen_reset": gen_reset, "pending_uploads": pending_uploads}
 
 
 def list_themes():
