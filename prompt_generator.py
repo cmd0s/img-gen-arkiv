@@ -1,36 +1,85 @@
 import itertools
 import random
 import sqlite3
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
-DB_PATH = "generations.db"
+# Load environment variables
+load_dotenv()
 
-# Prompt components - mix and match for variety
-CATS = [
-    "cat", "kitten", "fluffy cat", "sleek cat", "fat cat", "elegant cat",
-    "mysterious cat", "majestic cat", "playful kitten", "wise old cat",
-]
+# =============================================================================
+# CONFIGURATION - Choose which generator to use (from .env)
+# =============================================================================
+ACTIVE_THEME = os.getenv("ACTIVE_THEME", "cats")  # Options: "cats", "dogs"
 
-ACCESSORIES = [
-    "wearing golden blockchain necklace",
-    "with bitcoin earrings",
-    "wearing ethereum pendant",
-    "with VR headset",
-    "wearing hacker hoodie",
-    "with laser eyes",
-    "wearing crown made of circuit boards",
-    "with glowing crypto wallet",
-    "wearing NFT collar",
-    "with holographic glasses",
-    "wearing LED collar",
-    "with mechanical wings",
-    "wearing space helmet",
-    "with diamond claws",
-    "wearing ninja mask",
-    "",  # no accessory
-]
+# =============================================================================
+# THEME DEFINITIONS
+# =============================================================================
 
-STYLES = [
+THEMES = {
+    "cats": {
+        "name": "CCats",
+        "app_name": "CCats",
+        "db_path": "generations_cats.db",
+        "output_prefix": "cat",
+        "subjects": [
+            "cat", "kitten", "fluffy cat", "sleek cat", "fat cat", "elegant cat",
+            "mysterious cat", "majestic cat", "playful kitten", "wise old cat",
+        ],
+        "accessories": [
+            "wearing golden blockchain necklace",
+            "with bitcoin earrings",
+            "wearing ethereum pendant",
+            "with VR headset",
+            "wearing hacker hoodie",
+            "with laser eyes",
+            "wearing crown made of circuit boards",
+            "with glowing crypto wallet",
+            "wearing NFT collar",
+            "with holographic glasses",
+            "wearing LED collar",
+            "with mechanical wings",
+            "wearing space helmet",
+            "with diamond claws",
+            "wearing ninja mask",
+            "",  # no accessory
+        ],
+    },
+    "dogs": {
+        "name": "CDogs",
+        "app_name": "CDogs",
+        "db_path": "generations_dogs.db",
+        "output_prefix": "dog",
+        "subjects": [
+            "dog", "puppy", "fluffy dog", "golden retriever", "husky", "corgi",
+            "german shepherd", "poodle", "shiba inu", "labrador",
+            "french bulldog", "beagle", "dachshund", "border collie",
+        ],
+        "accessories": [
+            "wearing golden blockchain collar",
+            "with bitcoin tag",
+            "wearing ethereum bandana",
+            "with VR headset",
+            "wearing hacker hoodie",
+            "with laser eyes",
+            "wearing crown made of circuit boards",
+            "with glowing crypto wallet",
+            "wearing NFT collar",
+            "with holographic glasses",
+            "wearing LED collar",
+            "with mechanical wings",
+            "wearing space helmet",
+            "with diamond teeth",
+            "wearing superhero cape",
+            "with rocket backpack",
+            "",  # no accessory
+        ],
+    },
+}
+
+# Shared components (same for all themes)
+SHARED_STYLES = [
     "cyberpunk style",
     "anime style",
     "realistic photography",
@@ -49,7 +98,7 @@ STYLES = [
     "ukiyo-e japanese art",
 ]
 
-COLORS = [
+SHARED_COLORS = [
     "golden and purple colors",
     "neon pink and blue",
     "green matrix colors",
@@ -64,7 +113,7 @@ COLORS = [
     "sunset orange and pink",
 ]
 
-BACKGROUNDS = [
+SHARED_BACKGROUNDS = [
     "blockchain network background",
     "crypto trading charts background",
     "neon city skyline",
@@ -80,7 +129,7 @@ BACKGROUNDS = [
     "",  # no specific background
 ]
 
-QUALITY = [
+SHARED_QUALITY = [
     "4k, highly detailed",
     "8k, ultra detailed",
     "masterpiece, best quality",
@@ -90,9 +139,40 @@ QUALITY = [
 ]
 
 
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def get_theme():
+    """Get the currently active theme configuration."""
+    if ACTIVE_THEME not in THEMES:
+        raise ValueError(f"Unknown theme: {ACTIVE_THEME}. Available: {list(THEMES.keys())}")
+    return THEMES[ACTIVE_THEME]
+
+
+def get_db_path():
+    """Get database path for current theme."""
+    return get_theme()["db_path"]
+
+
+def get_app_name():
+    """Get app name for ARKIV uploads."""
+    return get_theme()["app_name"]
+
+
+def get_output_prefix():
+    """Get output filename prefix."""
+    return get_theme()["output_prefix"]
+
+
+# =============================================================================
+# DATABASE FUNCTIONS
+# =============================================================================
+
 def init_db():
     """Initialize SQLite database for tracking generations."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS generations (
@@ -109,12 +189,16 @@ def init_db():
 
 
 def generate_all_prompts():
-    """Generate all possible prompt combinations."""
+    """Generate all possible prompt combinations for current theme."""
+    theme = get_theme()
+    subjects = theme["subjects"]
+    accessories = theme["accessories"]
+
     prompts = []
-    for cat, accessory, style, color, bg, quality in itertools.product(
-        CATS, ACCESSORIES, STYLES, COLORS, BACKGROUNDS, QUALITY
+    for subject, accessory, style, color, bg, quality in itertools.product(
+        subjects, accessories, SHARED_STYLES, SHARED_COLORS, SHARED_BACKGROUNDS, SHARED_QUALITY
     ):
-        parts = [f"a {cat}"]
+        parts = [f"a {subject}"]
         if accessory:
             parts.append(accessory)
         parts.extend([style, color])
@@ -136,7 +220,8 @@ def seed_database(shuffle: bool = True):
     if shuffle:
         random.shuffle(prompts)
 
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     # Insert prompts, ignore if already exists
@@ -161,13 +246,15 @@ def seed_database(shuffle: bool = True):
 
     conn.close()
 
-    print(f"Database seeded: {total} total prompts, {pending} pending, {completed} completed")
+    theme = get_theme()
+    print(f"[{theme['name']}] Database seeded: {total} total prompts, {pending} pending, {completed} completed")
     return total
 
 
 def get_next_prompt():
     """Get next pending prompt from database."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -186,7 +273,8 @@ def get_next_prompt():
 
 def mark_in_progress(prompt_id: int):
     """Mark a prompt as in progress."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'in_progress' WHERE id = ?",
@@ -198,7 +286,8 @@ def mark_in_progress(prompt_id: int):
 
 def mark_completed(prompt_id: int, filename: str):
     """Mark a prompt as completed with the output filename."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute(
         """UPDATE generations
@@ -212,7 +301,8 @@ def mark_completed(prompt_id: int, filename: str):
 
 def mark_failed(prompt_id: int):
     """Mark a prompt as failed (will be retried)."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'pending' WHERE id = ?",
@@ -224,7 +314,8 @@ def mark_failed(prompt_id: int):
 
 def get_stats():
     """Get generation statistics."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     cursor.execute("SELECT COUNT(*) FROM generations")
@@ -252,7 +343,8 @@ def get_stats():
 
 def reset_in_progress():
     """Reset any 'in_progress' items back to 'pending' (for crash recovery)."""
-    conn = sqlite3.connect(DB_PATH)
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute(
         "UPDATE generations SET status = 'pending' WHERE status = 'in_progress'"
@@ -266,19 +358,57 @@ def reset_in_progress():
     return affected
 
 
+def list_themes():
+    """List all available themes."""
+    print("Available themes:")
+    for key, theme in THEMES.items():
+        marker = " (ACTIVE)" if key == ACTIVE_THEME else ""
+        subjects_count = len(theme["subjects"])
+        accessories_count = len(theme["accessories"])
+        total = subjects_count * accessories_count * len(SHARED_STYLES) * len(SHARED_COLORS) * len(SHARED_BACKGROUNDS) * len(SHARED_QUALITY)
+        print(f"  - {key}: {theme['name']} ({total:,} combinations){marker}")
+
+
 if __name__ == "__main__":
+    import sys
+
+    # Allow theme selection via command line
+    if len(sys.argv) > 1:
+        requested_theme = sys.argv[1]
+        if requested_theme in THEMES:
+            ACTIVE_THEME = requested_theme
+        elif requested_theme == "--list":
+            list_themes()
+            sys.exit(0)
+        else:
+            print(f"Unknown theme: {requested_theme}")
+            list_themes()
+            sys.exit(1)
+
+    theme = get_theme()
+
     # Show what we can generate
-    total = len(CATS) * len(ACCESSORIES) * len(STYLES) * len(COLORS) * len(BACKGROUNDS) * len(QUALITY)
-    print(f"Possible combinations: {total:,}")
+    subjects = theme["subjects"]
+    accessories = theme["accessories"]
+    total = len(subjects) * len(accessories) * len(SHARED_STYLES) * len(SHARED_COLORS) * len(SHARED_BACKGROUNDS) * len(SHARED_QUALITY)
+
+    print(f"Theme: {theme['name']}")
+    print(f"App name: {theme['app_name']}")
+    print(f"Database: {theme['db_path']}")
+    print(f"Output prefix: {theme['output_prefix']}")
+    print(f"\nPossible combinations: {total:,}")
     print(f"\nComponents:")
-    print(f"  - Cats: {len(CATS)}")
-    print(f"  - Accessories: {len(ACCESSORIES)}")
-    print(f"  - Styles: {len(STYLES)}")
-    print(f"  - Colors: {len(COLORS)}")
-    print(f"  - Backgrounds: {len(BACKGROUNDS)}")
-    print(f"  - Quality tags: {len(QUALITY)}")
+    print(f"  - Subjects: {len(subjects)}")
+    print(f"  - Accessories: {len(accessories)}")
+    print(f"  - Styles: {len(SHARED_STYLES)}")
+    print(f"  - Colors: {len(SHARED_COLORS)}")
+    print(f"  - Backgrounds: {len(SHARED_BACKGROUNDS)}")
+    print(f"  - Quality tags: {len(SHARED_QUALITY)}")
 
     print(f"\nExample prompts:")
     prompts = generate_all_prompts()
     for p in random.sample(prompts, min(5, len(prompts))):
         print(f"  - {p[:100]}...")
+
+    print(f"\n" + "=" * 40)
+    list_themes()

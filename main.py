@@ -4,6 +4,10 @@ import time
 import os
 import requests
 from websocket import create_connection
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from prompt_generator import (
     seed_database,
@@ -13,12 +17,15 @@ from prompt_generator import (
     mark_failed,
     get_stats,
     reset_in_progress,
+    get_theme,
+    get_output_prefix,
+    get_app_name,
 )
 from arkiv_uploader import upload_image_to_arkiv
 
-# 1. Configure for your Windows machine with ComfyUI
-COMFY_HOST = "192.168.0.122"   # Enter the IP of your Windows with ComfyUI
-COMFY_PORT = 8899             # Enter the ComfyUI port, e.g. 8188
+# ComfyUI configuration (from .env)
+COMFY_HOST = os.getenv("COMFY_HOST", "192.168.0.122")
+COMFY_PORT = int(os.getenv("COMFY_PORT", "8899"))
 
 BASE_URL = f"http://{COMFY_HOST}:{COMFY_PORT}"
 WS_URL = f"ws://{COMFY_HOST}:{COMFY_PORT}/ws"
@@ -150,10 +157,11 @@ def upload_to_arkiv(image_path: str, prompt: str, image_id: int) -> dict:
     content_type = "image/png" if ext == ".png" else "image/jpeg"
 
     size_kb = len(image_data) / 1024
-    print(f"Image size: {size_kb:.2f}KB, Content-Type: {content_type}")
+    app_name = get_app_name()
+    print(f"Image size: {size_kb:.2f}KB, Content-Type: {content_type}, App: {app_name}")
 
     # Upload to ARKIV
-    result = upload_image_to_arkiv(image_data, prompt, image_id, content_type)
+    result = upload_image_to_arkiv(image_data, prompt, image_id, content_type, app_name)
 
     print(f"ARKIV upload success! Entity: {result.get('entityKey')}")
     return result
@@ -184,7 +192,8 @@ def generate_image(prompt_text: str, image_id: int) -> str:
     # 6. Download first image and save as PNG
     os.makedirs("output", exist_ok=True)
     img_info = images[0]
-    out_path = f"output/cat_{image_id}.png"
+    prefix = get_output_prefix()
+    out_path = f"output/{prefix}_{image_id}.png"
     download_image(img_info, out_path)
 
     # 7. Upload to ARKIV if enabled
@@ -205,9 +214,10 @@ def generate_image(prompt_text: str, image_id: int) -> str:
 
 
 def run_endless_generator():
-    """Run endless cat image generation from database."""
+    """Run endless image generation from database."""
+    theme = get_theme()
     print("=" * 60)
-    print("ENDLESS CAT IMAGE GENERATOR")
+    print(f"ENDLESS {theme['name'].upper()} IMAGE GENERATOR")
     print("=" * 60)
 
     # Initialize and seed database if needed

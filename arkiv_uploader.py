@@ -31,7 +31,8 @@ def upload_image_to_arkiv(
     image_data: bytes,
     prompt: str,
     image_id: int,
-    content_type: str = "image/jpeg"
+    content_type: str = "image/jpeg",
+    app_name: str = "CCats"
 ) -> dict:
     """
     Upload image to ARKIV blockchain.
@@ -41,6 +42,7 @@ def upload_image_to_arkiv(
         prompt: The prompt used to generate the image
         image_id: Unique identifier for the image
         content_type: MIME type (image/jpeg or image/png)
+        app_name: Application name for ARKIV attributes
 
     Returns:
         dict with entityKey and txHash
@@ -53,7 +55,7 @@ def upload_image_to_arkiv(
         content_type=content_type,
         attributes={
             "type": "image",
-            "app": "CCats",
+            "app": app_name,
             "prompt": prompt[:500],  # Limit prompt length
             "id": image_id,
         },
