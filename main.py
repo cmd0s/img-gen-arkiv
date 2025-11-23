@@ -54,8 +54,8 @@ MAX_IMAGE_SIZE_KB = 117
 UPLOAD_TO_ARKIV = True
 
 # Threading settings
-UPLOAD_QUEUE_SIZE = 100  # Max items in upload queue (backpressure)
-UPLOADER_THREADS = 10    # Number of parallel upload threads
+UPLOAD_QUEUE_SIZE = 10   # Max items in upload queue (backpressure)
+UPLOADER_THREADS = 1     # Number of parallel upload threads (ARKIV is slow)
 
 
 # =============================================================================
