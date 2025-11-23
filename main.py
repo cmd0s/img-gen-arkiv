@@ -54,7 +54,8 @@ MAX_IMAGE_SIZE_KB = 117
 UPLOAD_TO_ARKIV = True
 
 # Threading settings
-UPLOAD_QUEUE_SIZE = 5  # Max items in upload queue (backpressure)
+UPLOAD_QUEUE_SIZE = 100  # Max items in upload queue (backpressure)
+UPLOADER_THREADS = 10    # Number of parallel upload threads
 
 
 # =============================================================================
@@ -361,10 +362,10 @@ def uploader_thread():
 
 
 def run_threaded_generator():
-    """Run image generation with two threads (optimized mode).
+    """Run image generation with multiple threads (optimized mode).
 
     - Generator thread: GPU work (generate images)
-    - Uploader thread: Network I/O (upload to ARKIV)
+    - Multiple uploader threads: Network I/O (upload to ARKIV in parallel)
 
     GPU doesn't wait for uploads, maximizing utilization.
     """
@@ -386,19 +387,23 @@ def run_threaded_generator():
     if stats['generated'] > 0:
         print(f"Images waiting for upload: {stats['generated']}")
     print(f"ARKIV upload: {'ENABLED' if UPLOAD_TO_ARKIV else 'DISABLED'}")
-    print(f"Mode: THREADED (generator + uploader)")
+    print(f"Mode: THREADED (1 generator + {UPLOADER_THREADS} uploaders)")
     print("-" * 60)
 
     # Reset shutdown event in case of restart
     shutdown_event.clear()
 
-    # Start threads
+    # Start generator thread
     gen_thread = threading.Thread(target=generator_thread, name="Generator")
-    upl_thread = threading.Thread(target=uploader_thread, name="Uploader")
-
     gen_thread.start()
+
+    # Start multiple uploader threads
+    upl_threads = []
     if UPLOAD_TO_ARKIV:
-        upl_thread.start()
+        for i in range(UPLOADER_THREADS):
+            t = threading.Thread(target=uploader_thread, name=f"Uploader-{i+1}")
+            t.start()
+            upl_threads.append(t)
 
     try:
         # Wait for generator to finish
@@ -406,14 +411,15 @@ def run_threaded_generator():
 
         # Wait for all uploads to complete
         if UPLOAD_TO_ARKIV:
-            print("\n[Main] Generator finished, waiting for uploads to complete...")
+            print(f"\n[Main] Generator finished, waiting for {len(upl_threads)} uploaders to complete...")
             upload_queue.join()
 
-        # Signal uploader to stop
+        # Signal uploaders to stop
         shutdown_event.set()
 
-        if UPLOAD_TO_ARKIV:
-            upl_thread.join(timeout=10)
+        # Wait for all uploader threads to finish
+        for t in upl_threads:
+            t.join(timeout=10)
 
     except KeyboardInterrupt:
         print("\n\n[Main] Interrupted by user, shutting down gracefully...")
@@ -421,8 +427,8 @@ def run_threaded_generator():
 
         # Wait for threads to finish current work
         gen_thread.join(timeout=5)
-        if UPLOAD_TO_ARKIV:
-            upl_thread.join(timeout=10)
+        for t in upl_threads:
+            t.join(timeout=10)
 
         print("[Main] Threads stopped")
 
