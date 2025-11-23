@@ -52,9 +52,11 @@ DELAY_BETWEEN_GENERATIONS = 2
 # ARKIV settings
 MAX_IMAGE_SIZE_KB = 117
 UPLOAD_TO_ARKIV = True
+MAX_UPLOAD_RETRIES = 3   # Number of retry attempts for failed uploads
+RETRY_DELAY = 30         # Seconds to wait between retries
 
 # Threading settings
-UPLOAD_QUEUE_SIZE = 10   # Max items in upload queue (backpressure)
+UPLOAD_QUEUE_SIZE = 0    # 0 = unlimited queue (generator runs at full GPU speed)
 UPLOADER_THREADS = 1     # Number of parallel upload threads (ARKIV is slow)
 
 
@@ -344,16 +346,33 @@ def uploader_thread():
                 print(f"[{thread_name}] Image too large ({image_size_kb:.2f}KB > {MAX_IMAGE_SIZE_KB}KB), skipping upload")
                 mark_completed(item.prompt_id, item.image_path)
             else:
-                # Upload to ARKIV
-                print(f"[{thread_name}] Uploading: {item.image_path}")
-                upload_to_arkiv(item.image_path, item.prompt_text, item.image_id)
-                mark_completed(item.prompt_id, item.image_path)
-                print(f"[{thread_name}] SUCCESS: {item.image_path}")
+                # Upload to ARKIV with retry logic
+                upload_success = False
+                for attempt in range(1, MAX_UPLOAD_RETRIES + 1):
+                    try:
+                        print(f"[{thread_name}] Uploading (attempt {attempt}/{MAX_UPLOAD_RETRIES}): {item.image_path}")
+                        upload_to_arkiv(item.image_path, item.prompt_text, item.image_id)
+                        mark_completed(item.prompt_id, item.image_path)
+                        print(f"[{thread_name}] SUCCESS: {item.image_path}")
+                        upload_success = True
+                        break
+                    except Exception as e:
+                        print(f"[{thread_name}] Upload attempt {attempt} FAILED: {e}")
+                        if attempt < MAX_UPLOAD_RETRIES:
+                            print(f"[{thread_name}] Waiting {RETRY_DELAY}s before retry...")
+                            # Wait with periodic shutdown checks
+                            for _ in range(RETRY_DELAY):
+                                if shutdown_event.is_set():
+                                    break
+                                time.sleep(1)
+                            if shutdown_event.is_set():
+                                # Mark back to generated for retry on next run
+                                mark_generated(item.prompt_id, item.image_path)
+                                break
 
-        except Exception as e:
-            print(f"[{thread_name}] Upload FAILED: {e}")
-            # Mark back to generated for retry on next run
-            mark_generated(item.prompt_id, item.image_path)
+                if not upload_success:
+                    print(f"[{thread_name}] All {MAX_UPLOAD_RETRIES} attempts failed, marking for later retry")
+                    mark_generated(item.prompt_id, item.image_path)
 
         finally:
             upload_queue.task_done()
