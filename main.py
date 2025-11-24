@@ -80,6 +80,51 @@ upload_queue: queue.Queue = queue.Queue(maxsize=UPLOAD_QUEUE_SIZE)
 # Shutdown signal for graceful termination
 shutdown_event = threading.Event()
 
+# Upload statistics (thread-safe)
+upload_stats = {
+    "start_time": None,
+    "total_attempts": 0,
+    "successful": 0,
+    "failed": 0,
+    "skipped": 0,
+    "upload_times": [],  # Last N upload durations for average
+}
+upload_stats_lock = threading.Lock()
+
+
+def get_upload_stats_summary(last_upload_time: float = None) -> str:
+    """Generate upload statistics summary string."""
+    with upload_stats_lock:
+        if upload_stats["start_time"] is None:
+            return "No uploads yet"
+
+        elapsed = time.time() - upload_stats["start_time"]
+        elapsed_min = elapsed / 60
+        elapsed_hr = elapsed / 3600
+
+        total = upload_stats["successful"] + upload_stats["skipped"]
+        failed = upload_stats["failed"]
+        total_attempts = upload_stats["total_attempts"]
+
+        # Uploads per minute/hour
+        uploads_per_min = total / elapsed_min if elapsed_min > 0 else 0
+        uploads_per_hr = total / elapsed_hr if elapsed_hr > 0 else 0
+
+        # Failure rate
+        fail_rate = (failed / total_attempts * 100) if total_attempts > 0 else 0
+
+        # Average upload time (last 20)
+        recent_times = upload_stats["upload_times"][-20:]
+        avg_time = sum(recent_times) / len(recent_times) if recent_times else 0
+
+        # Build summary
+        last_str = f"{last_upload_time:.1f}s" if last_upload_time else "-"
+        return (
+            f"STATS: {total} ok | {failed} fail ({fail_rate:.1f}%) | "
+            f"Last: {last_str} | Avg: {avg_time:.1f}s | "
+            f"{uploads_per_min:.1f}/min | {uploads_per_hr:.0f}/hr"
+        )
+
 
 # =============================================================================
 # COMFYUI FUNCTIONS
@@ -340,26 +385,51 @@ def uploader_thread():
             continue
 
         try:
+            # Initialize start time on first upload
+            with upload_stats_lock:
+                if upload_stats["start_time"] is None:
+                    upload_stats["start_time"] = time.time()
+
             # Check image size
             image_size_kb = os.path.getsize(item.image_path) / 1024
+            last_upload_time = None
 
             if image_size_kb > MAX_IMAGE_SIZE_KB:
                 print(f"[{thread_name}] Image too large ({image_size_kb:.2f}KB > {MAX_IMAGE_SIZE_KB}KB), skipping upload")
                 mark_completed(item.prompt_id, item.image_path)
+                with upload_stats_lock:
+                    upload_stats["skipped"] += 1
                 print(f"[{thread_name}] >>> ARKIV SKIP  | ID: {item.image_id} | Too large <<<")
+                print(f"[{thread_name}] {get_upload_stats_summary()}")
             else:
                 # Upload to ARKIV with retry logic
                 upload_success = False
                 for attempt in range(1, MAX_UPLOAD_RETRIES + 1):
                     try:
                         print(f"[{thread_name}] Uploading (attempt {attempt}/{MAX_UPLOAD_RETRIES}): ID {item.image_id}")
+                        upload_start = time.time()
                         upload_to_arkiv(item.image_path, item.prompt_text, item.image_id)
+                        last_upload_time = time.time() - upload_start
+
                         mark_completed(item.prompt_id, item.image_path)
-                        print(f"[{thread_name}] >>> ARKIV OK    | ID: {item.image_id} <<<")
+                        with upload_stats_lock:
+                            upload_stats["successful"] += 1
+                            upload_stats["total_attempts"] += attempt
+                            upload_stats["upload_times"].append(last_upload_time)
+                            # Keep only last 100 times
+                            if len(upload_stats["upload_times"]) > 100:
+                                upload_stats["upload_times"] = upload_stats["upload_times"][-100:]
+
+                        print(f"[{thread_name}] >>> ARKIV OK    | ID: {item.image_id} | {last_upload_time:.1f}s <<<")
+                        print(f"[{thread_name}] {get_upload_stats_summary(last_upload_time)}")
                         upload_success = True
                         break
                     except Exception as e:
+                        with upload_stats_lock:
+                            upload_stats["failed"] += 1
+                            upload_stats["total_attempts"] += 1
                         print(f"[{thread_name}] !!! ARKIV FAIL  | ID: {item.image_id} | Attempt {attempt}/{MAX_UPLOAD_RETRIES} | {e}")
+                        print(f"[{thread_name}] {get_upload_stats_summary()}")
                         if attempt < MAX_UPLOAD_RETRIES:
                             print(f"[{thread_name}]     Retry in {RETRY_DELAY}s...")
                             # Wait with periodic shutdown checks
