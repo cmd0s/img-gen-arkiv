@@ -346,21 +346,22 @@ def uploader_thread():
             if image_size_kb > MAX_IMAGE_SIZE_KB:
                 print(f"[{thread_name}] Image too large ({image_size_kb:.2f}KB > {MAX_IMAGE_SIZE_KB}KB), skipping upload")
                 mark_completed(item.prompt_id, item.image_path)
+                print(f"[{thread_name}] >>> ARKIV SKIP  | ID: {item.image_id} | Too large <<<")
             else:
                 # Upload to ARKIV with retry logic
                 upload_success = False
                 for attempt in range(1, MAX_UPLOAD_RETRIES + 1):
                     try:
-                        print(f"[{thread_name}] Uploading (attempt {attempt}/{MAX_UPLOAD_RETRIES}): {item.image_path}")
+                        print(f"[{thread_name}] Uploading (attempt {attempt}/{MAX_UPLOAD_RETRIES}): ID {item.image_id}")
                         upload_to_arkiv(item.image_path, item.prompt_text, item.image_id)
                         mark_completed(item.prompt_id, item.image_path)
-                        print(f"[{thread_name}] SUCCESS: {item.image_path}")
+                        print(f"[{thread_name}] >>> ARKIV OK    | ID: {item.image_id} <<<")
                         upload_success = True
                         break
                     except Exception as e:
-                        print(f"[{thread_name}] Upload attempt {attempt} FAILED: {e}")
+                        print(f"[{thread_name}] !!! ARKIV FAIL  | ID: {item.image_id} | Attempt {attempt}/{MAX_UPLOAD_RETRIES} | {e}")
                         if attempt < MAX_UPLOAD_RETRIES:
-                            print(f"[{thread_name}] Waiting {RETRY_DELAY}s before retry...")
+                            print(f"[{thread_name}]     Retry in {RETRY_DELAY}s...")
                             # Wait with periodic shutdown checks
                             for _ in range(RETRY_DELAY):
                                 if shutdown_event.is_set():
@@ -372,7 +373,7 @@ def uploader_thread():
                                 break
 
                 if not upload_success:
-                    print(f"[{thread_name}] All {MAX_UPLOAD_RETRIES} attempts failed, marking for later retry")
+                    print(f"[{thread_name}] !!! ARKIV GAVE UP | ID: {item.image_id} | Will retry on next run !!!")
                     mark_generated(item.prompt_id, item.image_path)
 
         finally:
