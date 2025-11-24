@@ -420,11 +420,14 @@ def run_threaded_generator():
             print(f"\n[Main] Loading {len(pending_items)} pending uploads from previous run...")
             output_prefix = get_output_prefix()
             for item in pending_items:
+                # Extract image_id from filename (e.g., "output/ccats_5503.png" -> 5503)
+                filename = os.path.basename(item['filename'])
+                image_id = int(filename.replace(f"{output_prefix}_", "").replace(".png", ""))
                 upload_queue.put(GeneratedImage(
                     prompt_id=item['id'],
                     prompt_text=item['prompt'],
                     image_path=item['filename'],
-                    image_id=int(item['filename'].replace(f"{output_prefix}_", "").replace(".png", ""))
+                    image_id=image_id
                 ))
             print(f"[Main] Loaded {len(pending_items)} items into upload queue")
 
