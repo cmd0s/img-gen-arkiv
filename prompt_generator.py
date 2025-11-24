@@ -413,6 +413,23 @@ def get_generated_count():
     return count
 
 
+def get_all_generated():
+    """Get all items ready for upload (status='generated'), ordered by ID."""
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, prompt, filename FROM generations
+        WHERE status = 'generated'
+        ORDER BY id
+    """)
+    results = cursor.fetchall()
+    conn.close()
+
+    return [{"id": r[0], "prompt": r[1], "filename": r[2]} for r in results]
+
+
 def reset_interrupted():
     """Reset interrupted items for crash recovery (threaded mode).
 

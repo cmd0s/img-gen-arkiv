@@ -23,6 +23,7 @@ from prompt_generator import (
     reset_in_progress,
     reset_interrupted,
     get_next_generated,
+    get_all_generated,
     get_theme,
     get_output_prefix,
     get_app_name,
@@ -411,6 +412,21 @@ def run_threaded_generator():
 
     # Reset shutdown event in case of restart
     shutdown_event.clear()
+
+    # Load pending generated items into upload queue (from previous run)
+    if UPLOAD_TO_ARKIV:
+        pending_items = get_all_generated()
+        if pending_items:
+            print(f"\n[Main] Loading {len(pending_items)} pending uploads from previous run...")
+            output_prefix = get_output_prefix()
+            for item in pending_items:
+                upload_queue.put(GeneratedImage(
+                    prompt_id=item['id'],
+                    prompt_text=item['prompt'],
+                    image_path=item['filename'],
+                    image_id=int(item['filename'].replace(f"{output_prefix}_", "").replace(".png", ""))
+                ))
+            print(f"[Main] Loaded {len(pending_items)} items into upload queue")
 
     # Start generator thread
     gen_thread = threading.Thread(target=generator_thread, name="Generator")
